@@ -374,6 +374,7 @@ function ExplorerOptions({
 			!(!!viewName || !!viewKey) &&
 			!isRecentlyUsedSavedViewSelected
 		) {
+			// prevent the race condition with useShareBuilderUrl
 			timeoutId = setTimeout(() => {
 				onMenuItemSelectHandler({ key: preservedView.key });
 			}, 0);
