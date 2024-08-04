@@ -92,6 +92,7 @@ function ExplorerOptions({
 	const ref = useRef<RefSelectProps>(null);
 	const isDarkMode = useIsDarkMode();
 	const isLogsExplorer = sourcepage === DataSource.LOGS;
+
 	const PRESERVED_VIEW_LOCAL_STORAGE_KEY = isLogsExplorer
 		? LOCALSTORAGE.LAST_USED_SAVED_LOGS_VIEW
 		: LOCALSTORAGE.LAST_USED_SAVED_TRACES_VIEW;
@@ -112,7 +113,7 @@ function ExplorerOptions({
 			logEvent('Traces Explorer: Save view clicked', {
 				panelType,
 			});
-		} else if (sourcepage === DataSource.LOGS) {
+		} else if (isLogsExplorer) {
 			logEvent('Logs Explorer: Save view clicked', {
 				panelType,
 			});
@@ -131,7 +132,7 @@ function ExplorerOptions({
 			logEvent('Traces Explorer: Create alert', {
 				panelType,
 			});
-		} else if (sourcepage === DataSource.LOGS) {
+		} else if (isLogsExplorer) {
 			logEvent('Logs Explorer: Create alert', {
 				panelType,
 			});
@@ -153,7 +154,7 @@ function ExplorerOptions({
 			logEvent('Traces Explorer: Add to dashboard clicked', {
 				panelType,
 			});
-		} else if (sourcepage === DataSource.LOGS) {
+		} else if (isLogsExplorer) {
 			logEvent('Logs Explorer: Add to dashboard clicked', {
 				panelType,
 			});
@@ -259,13 +260,12 @@ function ExplorerOptions({
 		onMenuItemSelectHandler({
 			key: option.key,
 		});
-    
-    if (sourcepage === DataSource.TRACES) {
+		if (sourcepage === DataSource.TRACES) {
 			logEvent('Traces Explorer: Select view', {
 				panelType,
 				viewName: option?.value,
 			});
-		} else if (sourcepage === DataSource.LOGS) {
+		} else if (isLogsExplorer) {
 			logEvent('Logs Explorer: Select view', {
 				panelType,
 				viewName: option?.value,
@@ -279,7 +279,6 @@ function ExplorerOptions({
 				value: option.value,
 			}),
 		);
-    
 		if (ref.current) {
 			ref.current.blur();
 		}
@@ -324,7 +323,7 @@ function ExplorerOptions({
 				panelType,
 				viewName: newViewName,
 			});
-		} else if (sourcepage === DataSource.LOGS) {
+		} else if (isLogsExplorer) {
 			logEvent('Logs Explorer: Save view successful', {
 				panelType,
 				viewName: newViewName,
@@ -357,6 +356,8 @@ function ExplorerOptions({
 		}
 	};
 
+	const isEditDeleteSupported = allowedRoles.includes(role as string);
+
 	const [
 		isRecentlyUsedSavedViewSelected,
 		setIsRecentlyUsedSavedViewSelected,
@@ -364,23 +365,30 @@ function ExplorerOptions({
 
 	useEffect(() => {
 		const value = localStorage.getItem(PRESERVED_VIEW_LOCAL_STORAGE_KEY);
-		const lastPreservedView = JSON.parse(value || '{}');
+		const preservedView = JSON.parse(value || '{}');
+		let timeoutId: string | number | NodeJS.Timeout | undefined;
 
-		if (!!lastPreservedView?.key && viewsData?.data?.data) {
-			if (!isRecentlyUsedSavedViewSelected) {
-				onMenuItemSelectHandler({
-					key: lastPreservedView.key,
-				});
-			}
-			setIsRecentlyUsedSavedViewSelected(true);
+		if (
+			!!preservedView?.key &&
+			viewsData?.data?.data &&
+			!(!!viewName || !!viewKey) &&
+			!isRecentlyUsedSavedViewSelected
+		) {
+			timeoutId = setTimeout(() => {
+				onMenuItemSelectHandler({ key: preservedView.key });
+			}, 0);
+			setIsRecentlyUsedSavedViewSelected(false);
 		}
 
-		return (): void => setIsRecentlyUsedSavedViewSelected(true);
-
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [viewsData?.data?.data]);
-
-	const isEditDeleteSupported = allowedRoles.includes(role as string);
+		return (): void => clearTimeout(timeoutId);
+	}, [
+		PRESERVED_VIEW_LOCAL_STORAGE_KEY,
+		isRecentlyUsedSavedViewSelected,
+		onMenuItemSelectHandler,
+		viewKey,
+		viewName,
+		viewsData?.data?.data,
+	]);
 
 	return (
 		<div className="explorer-options-container">
