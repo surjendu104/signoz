@@ -1177,7 +1177,7 @@ func (r *AnomalyRule) getStdDev(series *v3.Series) float64 {
 	return math.Sqrt(sum / float64(len(series.Points)))
 }
 
-func (r *AnomalyRule) getExpectedValue(series, prevSeries, weekSeries, weekPrevSeries *v3.Series) float64 {
+func (r *AnomalyRule) getExpectedValue(_, prevSeries, weekSeries, weekPrevSeries *v3.Series) float64 {
 	prevSeriesAvg := r.getAvg(prevSeries)
 	weekSeriesAvg := r.getAvg(weekSeries)
 	weekPrevSeriesAvg := r.getAvg(weekPrevSeries)
@@ -1209,16 +1209,16 @@ func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries
 	var lbls labels.Labels
 	var lblsNormalized labels.Labels
 
+	if series == nil || prevSeries == nil || weekSeries == nil || weekPrevSeries == nil {
+		return alertSmpl, false
+	}
+
 	for name, value := range series.Labels {
 		lbls = append(lbls, labels.Label{Name: name, Value: value})
 		lblsNormalized = append(lblsNormalized, labels.Label{Name: normalizeLabelName(name), Value: value})
 	}
 
 	series.Points = removeGroupinSetPoints(*series)
-
-	if series == nil || prevSeries == nil || weekSeries == nil || weekPrevSeries == nil {
-		return alertSmpl, false
-	}
 
 	// nothing to evaluate
 	if len(series.Points) == 0 {

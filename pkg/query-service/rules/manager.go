@@ -593,7 +593,7 @@ func (m *Manager) prepareTask(acquireLock bool, r *PostableRule, taskName string
 		// add rule to memory
 		m.rules[ruleId] = ar
 	} else {
-		return nil, fmt.Errorf(fmt.Sprintf("unsupported rule type. Supported types: %s, %s", RuleTypeProm, RuleTypeThreshold))
+		return nil, fmt.Errorf("unsupported rule type. Supported types: %s, %s", RuleTypeProm, RuleTypeThreshold)
 	}
 
 	return task, nil
