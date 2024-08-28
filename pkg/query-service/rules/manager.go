@@ -21,6 +21,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	// opentracing "github.com/opentracing/opentracing-go"
+	"go.signoz.io/signoz/pkg/query-service/cache"
 	am "go.signoz.io/signoz/pkg/query-service/integrations/alertManager"
 	"go.signoz.io/signoz/pkg/query-service/interfaces"
 	"go.signoz.io/signoz/pkg/query-service/model"
@@ -65,6 +66,7 @@ type ManagerOptions struct {
 	Reader       interfaces.Reader
 
 	EvalDelay time.Duration
+	Cache     cache.Cache
 }
 
 // The Manager manages recording and alerting rules.
@@ -521,6 +523,7 @@ func (m *Manager) prepareTask(acquireLock bool, r *PostableRule, taskName string
 	}
 
 	ruleId := ruleIdFromTaskName(taskName)
+
 	if r.RuleType == RuleTypeThreshold {
 		// create a threshold rule
 		tr, err := NewThresholdRule(
@@ -568,6 +571,27 @@ func (m *Manager) prepareTask(acquireLock bool, r *PostableRule, taskName string
 		// add rule to memory
 		m.rules[ruleId] = pr
 
+	} else if r.RuleType == RuleTypeAnomaly {
+		ar, err := NewAnomalyRule(
+			ruleId,
+			r,
+			AnomalyRuleOpts{},
+			m.featureFlags,
+			m.reader,
+			m.opts.Cache,
+		)
+
+		if err != nil {
+			return task, err
+		}
+
+		rules = append(rules, ar)
+
+		// create anomaly rule task for evalution
+		task = newTask(TaskTypeCh, taskName, taskNamesuffix, time.Duration(r.Frequency), rules, m.opts, m.prepareNotifyFunc(), m.ruleDB)
+
+		// add rule to memory
+		m.rules[ruleId] = ar
 	} else {
 		return nil, fmt.Errorf(fmt.Sprintf("unsupported rule type. Supported types: %s, %s", RuleTypeProm, RuleTypeThreshold))
 	}

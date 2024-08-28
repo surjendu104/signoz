@@ -22,6 +22,8 @@ type Sample struct {
 	MetricOrig labels.Labels
 
 	IsMissing bool
+
+	ExpectedValue float64
 }
 
 func (s Sample) String() string {

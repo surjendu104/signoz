@@ -14,6 +14,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"go.signoz.io/signoz/pkg/query-service/cache"
 	"go.signoz.io/signoz/pkg/query-service/common"
 	"go.signoz.io/signoz/pkg/query-service/converter"
 	"go.signoz.io/signoz/pkg/query-service/postprocess"
@@ -120,6 +121,7 @@ func NewAnomalyRule(
 	opts AnomalyRuleOpts,
 	featureFlags interfaces.FeatureLookup,
 	reader interfaces.Reader,
+	cache cache.Cache,
 ) (*AnomalyRule, error) {
 
 	zap.L().Info("creating new AnomalyRule", zap.String("id", id), zap.Any("opts", opts))
@@ -154,14 +156,14 @@ func NewAnomalyRule(
 
 	querierOption := querier.QuerierOptions{
 		Reader:        reader,
-		Cache:         nil,
+		Cache:         cache,
 		KeyGenerator:  queryBuilder.NewKeyGenerator(),
 		FeatureLookup: featureFlags,
 	}
 
 	querierOptsV2 := querierV2.QuerierOptions{
 		Reader:        reader,
-		Cache:         nil,
+		Cache:         cache,
 		KeyGenerator:  queryBuilder.NewKeyGenerator(),
 		FeatureLookup: featureFlags,
 	}
@@ -831,9 +833,6 @@ func (r *AnomalyRule) buildAndRunQuery(ctx context.Context, ts time.Time, ch cli
 		return nil, fmt.Errorf("internal error while setting temporality")
 	}
 
-	jsun, _ := json.Marshal(params)
-	fmt.Println("params", string(jsun))
-
 	currPeriodResults, _, currPeriodErr := r.querierV2.QueryRange(ctx, params.CurrentPeriodQuery, map[string]v3.AttributeKey{})
 	prevPeriodResults, _, prevPeriodErr := r.querierV2.QueryRange(ctx, params.PastPeriodQuery, map[string]v3.AttributeKey{})
 	weekResults, _, weekErr := r.querierV2.QueryRange(ctx, params.CurrentWeekQuery, map[string]v3.AttributeKey{})
@@ -910,10 +909,9 @@ func (r *AnomalyRule) buildAndRunQuery(ctx context.Context, ts time.Time, ch cli
 		weekSeries := r.getMatchingSeries(weekQueryResult, series)
 		weekPrevSeries := r.getMatchingSeries(weekPrevQueryResult, series)
 
-		shouldAlert := r.shouldAlert(series, prevSeries, weekSeries, weekPrevSeries)
+		smpl, shouldAlert := r.shouldAlert(series, prevSeries, weekSeries, weekPrevSeries)
 		if shouldAlert {
-			// do something
-			fmt.Println("should alert")
+			resultVector = append(resultVector, smpl)
 		}
 	}
 	return resultVector, nil
@@ -1183,19 +1181,30 @@ func (r *AnomalyRule) getExpectedValue(series, prevSeries, weekSeries, weekPrevS
 	prevSeriesAvg := r.getAvg(prevSeries)
 	weekSeriesAvg := r.getAvg(weekSeries)
 	weekPrevSeriesAvg := r.getAvg(weekPrevSeries)
+	zap.L().Debug("getExpectedValue",
+		zap.Float64("prevSeriesAvg", prevSeriesAvg),
+		zap.Float64("weekSeriesAvg", weekSeriesAvg),
+		zap.Float64("weekPrevSeriesAvg", weekPrevSeriesAvg),
+		zap.Float64("expectedValue", prevSeriesAvg+weekSeriesAvg-weekPrevSeriesAvg),
+	)
 	return prevSeriesAvg + weekSeriesAvg - weekPrevSeriesAvg
 }
 
 func (r *AnomalyRule) getScore(series, prevSeries, weekSeries, weekPrevSeries *v3.Series, value float64) float64 {
 	expectedValue := r.getExpectedValue(series, prevSeries, weekSeries, weekPrevSeries)
+
+	zap.L().Debug("getScore",
+		zap.Float64("value", value),
+		zap.Float64("expectedValue", expectedValue),
+		zap.Float64("stdDev", r.getStdDev(weekSeries)),
+		zap.Float64("avg", r.getAvg(weekSeries)),
+		zap.Float64("score", (value-expectedValue)/r.getStdDev(weekSeries)),
+	)
 	return (value - expectedValue) / r.getStdDev(weekSeries)
 }
 
-func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries *v3.Series) bool {
-	if series == nil || prevSeries == nil || weekSeries == nil || weekPrevSeries == nil {
-		return false
-	}
-
+func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries *v3.Series) (Sample, bool) {
+	var alertSmpl Sample
 	var shouldAlert bool
 	var lbls labels.Labels
 	var lblsNormalized labels.Labels
@@ -1207,9 +1216,13 @@ func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries
 
 	series.Points = removeGroupinSetPoints(*series)
 
+	if series == nil || prevSeries == nil || weekSeries == nil || weekPrevSeries == nil {
+		return alertSmpl, false
+	}
+
 	// nothing to evaluate
 	if len(series.Points) == 0 {
-		return false
+		return alertSmpl, false
 	}
 
 	switch r.matchType() {
@@ -1218,7 +1231,9 @@ func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries
 		if r.compareOp() == ValueIsAbove {
 			for _, smpl := range series.Points {
 				score := r.getScore(series, prevSeries, weekSeries, weekPrevSeries, smpl.Value)
+				expectedValue := r.getExpectedValue(series, prevSeries, weekSeries, weekPrevSeries)
 				if score > r.targetVal() {
+					alertSmpl = Sample{Point: Point{V: smpl.Value}, Metric: lblsNormalized, MetricOrig: lbls, ExpectedValue: expectedValue}
 					shouldAlert = true
 					break
 				}
@@ -1226,7 +1241,9 @@ func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries
 		} else if r.compareOp() == ValueIsBelow {
 			for _, smpl := range series.Points {
 				score := r.getScore(series, prevSeries, weekSeries, weekPrevSeries, smpl.Value)
+				expectedValue := r.getExpectedValue(series, prevSeries, weekSeries, weekPrevSeries)
 				if score < r.targetVal() {
+					alertSmpl = Sample{Point: Point{V: smpl.Value}, Metric: lblsNormalized, MetricOrig: lbls, ExpectedValue: expectedValue}
 					shouldAlert = true
 					break
 				}
@@ -1234,7 +1251,9 @@ func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries
 		} else if r.compareOp() == ValueIsEq {
 			for _, smpl := range series.Points {
 				score := r.getScore(series, prevSeries, weekSeries, weekPrevSeries, smpl.Value)
+				expectedValue := r.getExpectedValue(series, prevSeries, weekSeries, weekPrevSeries)
 				if score == r.targetVal() {
+					alertSmpl = Sample{Point: Point{V: smpl.Value}, Metric: lblsNormalized, MetricOrig: lbls, ExpectedValue: expectedValue}
 					shouldAlert = true
 					break
 				}
@@ -1242,7 +1261,9 @@ func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries
 		} else if r.compareOp() == ValueIsNotEq {
 			for _, smpl := range series.Points {
 				score := r.getScore(series, prevSeries, weekSeries, weekPrevSeries, smpl.Value)
+				expectedValue := r.getExpectedValue(series, prevSeries, weekSeries, weekPrevSeries)
 				if score != r.targetVal() {
+					alertSmpl = Sample{Point: Point{V: smpl.Value}, Metric: lblsNormalized, MetricOrig: lbls, ExpectedValue: expectedValue}
 					shouldAlert = true
 					break
 				}
@@ -1251,6 +1272,7 @@ func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries
 	case AllTheTimes:
 		// If all samples match the condition, the rule is firing.
 		shouldAlert = true
+		alertSmpl = Sample{Point: Point{V: r.targetVal()}, Metric: lblsNormalized, MetricOrig: lbls, ExpectedValue: r.getExpectedValue(series, prevSeries, weekSeries, weekPrevSeries)}
 		if r.compareOp() == ValueIsAbove {
 			for _, smpl := range series.Points {
 				score := r.getScore(series, prevSeries, weekSeries, weekPrevSeries, smpl.Value)
@@ -1295,6 +1317,7 @@ func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries
 			count++
 		}
 		avg := sum / count
+		alertSmpl = Sample{Point: Point{V: avg}, Metric: lblsNormalized, MetricOrig: lbls}
 		if r.compareOp() == ValueIsAbove {
 			if avg > r.targetVal() {
 				shouldAlert = true
@@ -1322,6 +1345,7 @@ func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries
 			}
 			sum += r.getScore(series, prevSeries, weekSeries, weekPrevSeries, smpl.Value)
 		}
+		alertSmpl = Sample{Point: Point{V: sum}, Metric: lblsNormalized, MetricOrig: lbls}
 		if r.compareOp() == ValueIsAbove {
 			if sum > r.targetVal() {
 				shouldAlert = true
@@ -1340,5 +1364,5 @@ func (r *AnomalyRule) shouldAlert(series, prevSeries, weekSeries, weekPrevSeries
 			}
 		}
 	}
-	return shouldAlert
+	return alertSmpl, shouldAlert
 }

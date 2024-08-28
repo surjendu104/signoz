@@ -28,7 +28,7 @@ import (
 )
 
 func initZapLog(enableQueryServiceLogOTLPExport bool) *zap.Logger {
-	config := zap.NewProductionConfig()
+	config := zap.NewDevelopmentConfig()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -39,7 +39,7 @@ func initZapLog(enableQueryServiceLogOTLPExport bool) *zap.Logger {
 
 	otlpEncoder := zapotlpencoder.NewOTLPEncoder(config.EncoderConfig)
 	consoleEncoder := zapcore.NewJSONEncoder(config.EncoderConfig)
-	defaultLogLevel := zapcore.InfoLevel
+	defaultLogLevel := zapcore.DebugLevel
 
 	res := resource.NewWithAttributes(
 		semconv.SchemaURL,

@@ -29,6 +29,7 @@ import (
 	"go.signoz.io/signoz/ee/query-service/integrations/gateway"
 	"go.signoz.io/signoz/ee/query-service/interfaces"
 	baseauth "go.signoz.io/signoz/pkg/query-service/auth"
+	"go.signoz.io/signoz/pkg/query-service/cache"
 	"go.signoz.io/signoz/pkg/query-service/migrate"
 	"go.signoz.io/signoz/pkg/query-service/model"
 	v3 "go.signoz.io/signoz/pkg/query-service/model/v3"
@@ -45,7 +46,6 @@ import (
 	"go.signoz.io/signoz/pkg/query-service/app/opamp"
 	opAmpModel "go.signoz.io/signoz/pkg/query-service/app/opamp/model"
 	"go.signoz.io/signoz/pkg/query-service/app/preferences"
-	"go.signoz.io/signoz/pkg/query-service/cache"
 	baseconst "go.signoz.io/signoz/pkg/query-service/constants"
 	"go.signoz.io/signoz/pkg/query-service/healthcheck"
 	basealm "go.signoz.io/signoz/pkg/query-service/integrations/alertManager"
@@ -168,6 +168,15 @@ func NewServer(serverOptions *ServerOptions) (*Server, error) {
 		}
 	}
 
+	var c cache.Cache
+	if serverOptions.CacheConfigPath != "" {
+		cacheOpts, err := cache.LoadFromYAMLCacheConfigFile(serverOptions.CacheConfigPath)
+		if err != nil {
+			return nil, err
+		}
+		c = cache.NewCache(cacheOpts)
+	}
+
 	<-readerReady
 	rm, err := makeRulesManager(serverOptions.PromConfigPath,
 		baseconst.GetAlertManagerApiPrefix(),
@@ -175,7 +184,7 @@ func NewServer(serverOptions *ServerOptions) (*Server, error) {
 		localDB,
 		reader,
 		serverOptions.DisableRules,
-		lm)
+		lm, c)
 
 	if err != nil {
 		return nil, err
@@ -231,15 +240,6 @@ func NewServer(serverOptions *ServerOptions) (*Server, error) {
 
 	telemetry.GetInstance().SetReader(reader)
 	telemetry.GetInstance().SetSaasOperator(constants.SaasSegmentKey)
-
-	var c cache.Cache
-	if serverOptions.CacheConfigPath != "" {
-		cacheOpts, err := cache.LoadFromYAMLCacheConfigFile(serverOptions.CacheConfigPath)
-		if err != nil {
-			return nil, err
-		}
-		c = cache.NewCache(cacheOpts)
-	}
 
 	fluxInterval, err := time.ParseDuration(serverOptions.FluxInterval)
 
@@ -727,7 +727,9 @@ func makeRulesManager(
 	db *sqlx.DB,
 	ch baseint.Reader,
 	disableRules bool,
-	fm baseint.FeatureLookup) (*rules.Manager, error) {
+	fm baseint.FeatureLookup,
+	c cache.Cache,
+) (*rules.Manager, error) {
 
 	// create engine
 	pqle, err := pqle.FromConfigPath(promConfigPath)
@@ -757,6 +759,7 @@ func makeRulesManager(
 		FeatureFlags: fm,
 		Reader:       ch,
 		EvalDelay:    baseconst.GetEvalDelay(),
+		Cache:        c,
 	}
 
 	// create Manager

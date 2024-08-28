@@ -27,6 +27,7 @@ type RuleType string
 const (
 	RuleTypeThreshold = "threshold_rule"
 	RuleTypeProm      = "promql_rule"
+	RuleTypeAnomaly   = "anomaly_rule"
 )
 
 type RuleHealth string
