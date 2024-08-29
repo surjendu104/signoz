@@ -14,6 +14,11 @@ import (
 	"go.signoz.io/signoz/pkg/query-service/model"
 )
 
+var (
+	ErrInvalidQueryType = errors.New("invalid query type")
+	ErrInvalidPanelType = errors.New("invalid panel type, panel type should be one of the following: value, graph, table, list, trace")
+)
+
 type DataSource string
 
 const (
@@ -209,7 +214,7 @@ func (p PanelType) Validate() error {
 	case PanelTypeValue, PanelTypeGraph, PanelTypeTable, PanelTypeList, PanelTypeTrace:
 		return nil
 	default:
-		return fmt.Errorf("invalid panel type: %s", p)
+		return ErrInvalidPanelType
 	}
 }
 
@@ -491,7 +496,7 @@ func (c *CompositeQuery) Validate() error {
 	}
 
 	if err := c.PanelType.Validate(); err != nil {
-		return fmt.Errorf("panel type is invalid: %w", err)
+		return err
 	}
 
 	if err := c.QueryType.Validate(); err != nil {

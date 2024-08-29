@@ -12,6 +12,15 @@ import (
 	"go.signoz.io/signoz/pkg/query-service/utils/labels"
 )
 
+var (
+	ErrInvalidCompositeQuery = errors.New("invalid composite query")
+	ErrNilCompositeQuery     = errors.New("composite query is nil")
+	ErrNilTarget             = errors.New("target is nil")
+	ErrInvalidCompareOp      = errors.New("invalid compare op")
+	ErrNoPromQLQuery         = errors.New("no promql query")
+	ErrInvalidPromQLQuery    = errors.New("invalid promql query")
+)
+
 // this file contains common structs and methods used by
 // rule engine
 
@@ -19,7 +28,7 @@ const (
 	// how long before re-sending the alert
 	resolvedRetention = 15 * time.Minute
 
-	TestAlertPostFix = "_TEST_ALERT"
+	testAlertPostFix = "_TEST_ALERT"
 )
 
 type RuleType string
@@ -61,29 +70,78 @@ func (s AlertState) String() string {
 	panic(errors.Errorf("unknown alert state: %d", s))
 }
 
+func (s AlertState) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.String())
+}
+
+func (s *AlertState) UnmarshalJSON(b []byte) error {
+	var v interface{}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	switch value := v.(type) {
+	case string:
+		switch value {
+		case "inactive":
+			*s = StateInactive
+		case "pending":
+			*s = StatePending
+		case "firing":
+			*s = StateFiring
+		case "disabled":
+			*s = StateDisabled
+		default:
+			return errors.New("invalid alert state")
+		}
+		return nil
+	default:
+		return errors.New("invalid alert state")
+	}
+}
+
 type Alert struct {
 	State AlertState
 
-	Labels      labels.BaseLabels
+	// Labels are used to differentiate an alert from all other alerts
+	// This is used for grouping and deduplication
+	Labels labels.BaseLabels
+	// Annotations are used to provide additional information about an alert
+	// This is used for displaying additional information in the UI
 	Annotations labels.BaseLabels
 
+	// QueryResultLables are used to store the labels of the query result
+	// This is used for storing the labels of the query result
 	QueryResultLables labels.BaseLabels
 
+	// GeneratorURL is the URL to the rule that generated this alert
 	GeneratorURL string
 
-	// list of preferred receivers, e.g. slack
+	// Receivers is a list of preferred receivers, e.g. slack
 	Receivers []string
 
-	Value      float64
-	ActiveAt   time.Time
-	FiredAt    time.Time
+	// Value is the value of the alert
+	Value float64
+
+	// ActiveAt is the time the alert was first active
+	ActiveAt time.Time
+
+	// FiredAt is the time the alert was first fired
+	FiredAt time.Time
+
+	// ResolvedAt is the time the alert was resolved
 	ResolvedAt time.Time
+
+	// LastSentAt is the time the alert was last sent
 	LastSentAt time.Time
+
+	// ValidUntil is the time the alert will be valid until
 	ValidUntil time.Time
 
 	Missing bool
 }
 
+// needsSending checks if the alert needs to be sent again
+// based on the current time and the last sent time
 func (a *Alert) needsSending(ts time.Time, resendDelay time.Duration) bool {
 	if a.State == StatePending {
 		return false
@@ -137,37 +195,52 @@ const (
 )
 
 type RuleCondition struct {
+	// CompositeQuery is the composite query for the rule condition
+	// This is non-nil when alert is created using UI
 	CompositeQuery *v3.CompositeQuery `json:"compositeQuery,omitempty" yaml:"compositeQuery,omitempty"`
-	CompareOp      CompareOp          `yaml:"op,omitempty" json:"op,omitempty"`
-	Target         *float64           `yaml:"target,omitempty" json:"target,omitempty"`
-	AlertOnAbsent  bool               `yaml:"alertOnAbsent,omitempty" json:"alertOnAbsent,omitempty"`
-	AbsentFor      uint64             `yaml:"absentFor,omitempty" json:"absentFor,omitempty"`
-	MatchType      MatchType          `json:"matchType,omitempty"`
-	TargetUnit     string             `json:"targetUnit,omitempty"`
-	SelectedQuery  string             `json:"selectedQueryName,omitempty"`
+	// CompareOp is the comparison operator for the rule condition
+	CompareOp CompareOp `yaml:"op,omitempty" json:"op,omitempty"`
+	// Target is the target value for the rule condition
+	// This is pointer for legacy reasons, because promql query is expressive enough to express any condition
+	Target *float64 `yaml:"target,omitempty" json:"target,omitempty"`
+	// AlertOnAbsent is a flag to trigger an alert if the target is absent
+	AlertOnAbsent bool `yaml:"alertOnAbsent,omitempty" json:"alertOnAbsent,omitempty"`
+	// AbsentFor is the duration for which the target must be absent to trigger an alert
+	AbsentFor uint64 `yaml:"absentFor,omitempty" json:"absentFor,omitempty"`
+	// MatchType is the type of match to be used for the rule condition
+	MatchType MatchType `json:"matchType,omitempty"`
+	// TargetUnit is the unit of the target value
+	TargetUnit string `json:"targetUnit,omitempty"`
+	// SelectedQuery is the name of the query who's result is used for this rule condition
+	SelectedQuery string `json:"selectedQueryName,omitempty"`
 }
 
-func (rc *RuleCondition) IsValid() bool {
+func (rc *RuleCondition) Validate() error {
 
 	if rc.CompositeQuery == nil {
-		return false
+		return ErrNilCompositeQuery
+	}
+
+	rc.CompositeQuery.Sanitize()
+
+	if err := rc.CompositeQuery.Validate(); err != nil && !errors.Is(err, v3.ErrInvalidPanelType) {
+		return errors.Wrap(err, "invalid composite query")
 	}
 
 	if rc.QueryType() == v3.QueryTypeBuilder {
 		if rc.Target == nil {
-			return false
+			return ErrNilTarget
 		}
 		if rc.CompareOp == "" {
-			return false
+			return ErrInvalidCompareOp
 		}
 	}
 	if rc.QueryType() == v3.QueryTypePromQL {
-
 		if len(rc.CompositeQuery.PromQueries) == 0 {
-			return false
+			return ErrNoPromQLQuery
 		}
 	}
-	return true
+	return nil
 }
 
 // QueryType is a short hand method to get query type

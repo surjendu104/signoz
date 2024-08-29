@@ -320,7 +320,7 @@ func TestParseQueryRangeParamsCompositeQuery(t *testing.T) {
 				},
 			},
 			expectErr: true,
-			errMsg:    "panel type is invalid",
+			errMsg:    "invalid panel type",
 		},
 		{
 			desc: "invalid query type",

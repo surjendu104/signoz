@@ -10,10 +10,32 @@ import (
 	"github.com/pkg/errors"
 	"go.signoz.io/signoz/pkg/query-service/model"
 	v3 "go.signoz.io/signoz/pkg/query-service/model/v3"
+	"go.uber.org/multierr"
 
 	"go.signoz.io/signoz/pkg/query-service/utils/times"
 	"go.signoz.io/signoz/pkg/query-service/utils/timestamp"
 	yaml "gopkg.in/yaml.v2"
+)
+
+type AlertType string
+
+const (
+	AlertTypeMetric     AlertType = "METRIC_BASED_ALERT"
+	AlertTypeTraces     AlertType = "TRACES_BASED_ALERT"
+	AlertTypeLogs       AlertType = "LOGS_BASED_ALERT"
+	AlertTypeExceptions AlertType = "EXCEPTIONS_BASED_ALERT"
+)
+
+type RuleDataKind string
+
+const (
+	RuleDataKindJson RuleDataKind = "json"
+	RuleDataKindYaml RuleDataKind = "yaml"
+)
+
+var (
+	ErrInvalidJSON = errors.New("invalid json")
+	ErrInvalidYAML = errors.New("invalid yaml")
 )
 
 // this file contains api request and responses to be
@@ -31,12 +53,12 @@ func newApiErrorBadData(err error) *model.ApiError {
 
 // PostableRule is used to create alerting rule from HTTP api
 type PostableRule struct {
-	AlertName   string   `yaml:"alert,omitempty" json:"alert,omitempty"`
-	AlertType   string   `yaml:"alertType,omitempty" json:"alertType,omitempty"`
-	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
-	RuleType    RuleType `yaml:"ruleType,omitempty" json:"ruleType,omitempty"`
-	EvalWindow  Duration `yaml:"evalWindow,omitempty" json:"evalWindow,omitempty"`
-	Frequency   Duration `yaml:"frequency,omitempty" json:"frequency,omitempty"`
+	AlertName   string    `yaml:"alert,omitempty" json:"alert,omitempty"`
+	AlertType   AlertType `yaml:"alertType,omitempty" json:"alertType,omitempty"`
+	Description string    `yaml:"description,omitempty" json:"description,omitempty"`
+	RuleType    RuleType  `yaml:"ruleType,omitempty" json:"ruleType,omitempty"`
+	EvalWindow  Duration  `yaml:"evalWindow,omitempty" json:"evalWindow,omitempty"`
+	Frequency   Duration  `yaml:"frequency,omitempty" json:"frequency,omitempty"`
 
 	RuleCondition *RuleCondition    `yaml:"condition,omitempty" json:"condition,omitempty"`
 	Labels        map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
@@ -56,33 +78,36 @@ type PostableRule struct {
 	OldYaml string `json:"yaml,omitempty"`
 }
 
-func ParsePostableRule(content []byte) (*PostableRule, []error) {
-	return parsePostableRule(content, "json")
+func ParsePostableRule(content []byte) (*PostableRule, error) {
+	return parsePostableRule(content, RuleDataKindJson)
 }
 
-func parsePostableRule(content []byte, kind string) (*PostableRule, []error) {
+func parsePostableRule(content []byte, kind RuleDataKind) (*PostableRule, error) {
 	return parseIntoRule(PostableRule{}, content, kind)
 }
 
 // parseIntoRule loads the content (data) into PostableRule and also
 // validates the end result
-func parseIntoRule(initRule PostableRule, content []byte, kind string) (*PostableRule, []error) {
+func parseIntoRule(initRule PostableRule, content []byte, kind RuleDataKind) (*PostableRule, error) {
 
 	rule := &initRule
 
 	var err error
-	if kind == "json" {
+	if kind == RuleDataKindJson {
 		if err = json.Unmarshal(content, rule); err != nil {
-			return nil, []error{fmt.Errorf("failed to load json")}
+			return nil, errors.Wrap(err, ErrInvalidJSON.Error())
 		}
-	} else if kind == "yaml" {
+	} else if kind == RuleDataKindYaml {
 		if err = yaml.Unmarshal(content, rule); err != nil {
-			return nil, []error{fmt.Errorf("failed to load yaml")}
+			return nil, errors.Wrap(err, ErrInvalidYAML.Error())
 		}
 	} else {
-		return nil, []error{fmt.Errorf("invalid data type")}
+		return nil, errors.New("invalid data type")
 	}
 
+	// There exists no legacy rules AFAIK, but we are keeping this condition
+	// here just in case.
+	// TODO(srikanthccv): Remove this condition once we have a way to migrate
 	if rule.RuleCondition == nil && rule.Expr != "" {
 		// account for legacy rules
 		rule.RuleType = RuleTypeProm
@@ -122,11 +147,11 @@ func parseIntoRule(initRule PostableRule, content []byte, kind string) (*Postabl
 		}
 	}
 
-	if errs := rule.Validate(); len(errs) > 0 {
-		return nil, errs
+	if err := rule.Validate(); err != nil {
+		return nil, err
 	}
 
-	return rule, []error{}
+	return rule, nil
 }
 
 func isValidLabelName(ln string) bool {
@@ -145,46 +170,35 @@ func isValidLabelValue(v string) bool {
 	return utf8.ValidString(v)
 }
 
-func (r *PostableRule) Validate() (errs []error) {
+func (r *PostableRule) Validate() error {
 
-	if r.RuleCondition == nil {
-		errs = append(errs, errors.Errorf("rule condition is required"))
-	} else {
-		if r.RuleCondition.CompositeQuery == nil {
-			errs = append(errs, errors.Errorf("composite metric query is required"))
-		}
+	if err := r.RuleCondition.Validate(); err != nil {
+		return err
 	}
 
-	if r.RuleType == RuleTypeThreshold {
-		if r.RuleCondition.Target == nil {
-			errs = append(errs, errors.Errorf("rule condition missing the threshold"))
-		}
-		if r.RuleCondition.CompareOp == "" {
-			errs = append(errs, errors.Errorf("rule condition missing the compare op"))
-		}
-		if r.RuleCondition.MatchType == "" {
-			errs = append(errs, errors.Errorf("rule condition missing the match option"))
-		}
-	}
+	var labelErrors []error
+	var annotationErrors []error
 
 	for k, v := range r.Labels {
 		if !isValidLabelName(k) {
-			errs = append(errs, errors.Errorf("invalid label name: %s", k))
+			labelErrors = append(labelErrors, errors.Errorf("invalid label name: %s", k))
 		}
 
 		if !isValidLabelValue(v) {
-			errs = append(errs, errors.Errorf("invalid label value: %s", v))
+			labelErrors = append(labelErrors, errors.Errorf("invalid label value: %s", v))
 		}
 	}
 
 	for k := range r.Annotations {
 		if !isValidLabelName(k) {
-			errs = append(errs, errors.Errorf("invalid annotation name: %s", k))
+			annotationErrors = append(annotationErrors, errors.Errorf("invalid annotation name: %s", k))
 		}
 	}
 
-	errs = append(errs, testTemplateParsing(r)...)
-	return errs
+	allErrors := append(labelErrors, annotationErrors...)
+
+	allErrors = append(allErrors, testTemplateParsing(r)...)
+	return multierr.Combine(allErrors...)
 }
 
 func testTemplateParsing(rl *PostableRule) (errs []error) {
@@ -234,9 +248,9 @@ type GettableRules struct {
 
 // GettableRule has info for an alerting rules.
 type GettableRule struct {
-	Id    string `json:"id"`
-	State string `json:"state"`
 	PostableRule
+	Id        string     `json:"id"`
+	State     AlertState `json:"state"`
 	CreatedAt *time.Time `json:"createAt"`
 	CreatedBy *string    `json:"createBy"`
 	UpdatedAt *time.Time `json:"updateAt"`

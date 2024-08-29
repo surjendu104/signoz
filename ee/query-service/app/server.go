@@ -749,7 +749,6 @@ func makeRulesManager(
 			PqlEngine: pqle,
 			Ch:        ch.GetConn(),
 		},
-		RepoURL:      ruleRepoURL,
 		DBConn:       db,
 		Context:      context.Background(),
 		Logger:       nil,

@@ -92,7 +92,7 @@ type ThresholdRule struct {
 
 	// Type of the rule
 	// One of ["LOGS_BASED_ALERT", "TRACES_BASED_ALERT", "METRIC_BASED_ALERT", "EXCEPTIONS_BASED_ALERT"]
-	typ string
+	typ AlertType
 
 	// querier is used for alerts created before the introduction of new metrics query builder
 	querier interfaces.Querier
@@ -132,8 +132,8 @@ func NewThresholdRule(
 
 	if p.RuleCondition == nil {
 		return nil, fmt.Errorf("no rule condition")
-	} else if !p.RuleCondition.IsValid() {
-		return nil, fmt.Errorf("invalid rule condition")
+	} else if err := p.RuleCondition.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid rule condition: %w", err)
 	}
 
 	t := ThresholdRule{
