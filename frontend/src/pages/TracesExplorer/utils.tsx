@@ -5,6 +5,7 @@ import TimeSeriesView from 'container/TimeSeriesView';
 import ListView from 'container/TracesExplorer/ListView';
 import TableView from 'container/TracesExplorer/TableView';
 import TracesView from 'container/TracesExplorer/TracesView';
+import { TagFilterItem } from 'types/api/queryBuilder/queryBuilderData';
 import { DataSource } from 'types/common/queryBuilder';
 
 interface GetTabsItemsProps {
@@ -56,3 +57,21 @@ export const getTabsItems = ({
 		children: <TableView />,
 	},
 ];
+
+export const isTagFilterItemEqual = (
+	filterItem: TagFilterItem,
+	selectedTag: TagFilterItem,
+): boolean =>
+	filterItem.key?.key === selectedTag.key?.key &&
+	filterItem.op === selectedTag.op &&
+	JSON.stringify(filterItem.value) === JSON.stringify(selectedTag.value);
+
+export const isSelectedTagsAlreadyPresent = (
+	filterItems: TagFilterItem[],
+	selectedTags: TagFilterItem[],
+): boolean =>
+	selectedTags.every((selectedTag) =>
+		filterItems.some((filterItem: TagFilterItem) =>
+			isTagFilterItemEqual(filterItem, selectedTag),
+		),
+	);

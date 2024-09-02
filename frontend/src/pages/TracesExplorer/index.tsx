@@ -11,6 +11,7 @@ import { AVAILABLE_EXPORT_PANEL_TYPES } from 'constants/panelTypes';
 import { initialQueriesMap, PANEL_TYPES } from 'constants/queryBuilder';
 import ExplorerOptionWrapper from 'container/ExplorerOptions/ExplorerOptionWrapper';
 import ExportPanel from 'container/ExportPanel';
+import { handleNonInQueryRange } from 'container/MetricsApplication/Tabs/util';
 import { useOptionsMenu } from 'container/OptionsMenu';
 import RightToolbarActions from 'container/QueryBuilder/components/ToolbarActions/RightToolbarActions';
 import DateTimeSelector from 'container/TopNav/DateTimeSelectionV2';
@@ -24,21 +25,24 @@ import { useShareBuilderUrl } from 'hooks/queryBuilder/useShareBuilderUrl';
 import { useHandleExplorerTabChange } from 'hooks/useHandleExplorerTabChange';
 import { useNotifications } from 'hooks/useNotifications';
 import useResourceAttribute from 'hooks/useResourceAttribute';
-import { convertRawQueriesToTraceSelectedTags } from 'hooks/useResourceAttribute/utils';
-import useUrlQuery from 'hooks/useUrlQuery';
+import { resourceAttributesToTagFilterItems } from 'hooks/useResourceAttribute/utils';
 import history from 'lib/history';
 import { cloneDeep, isEmpty, set } from 'lodash-es';
 import ErrorBoundaryFallback from 'pages/ErrorBoundaryFallback/ErrorBoundaryFallback';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Dashboard } from 'types/api/dashboard/getAll';
-import { Query } from 'types/api/queryBuilder/queryBuilderData';
+import { Query, TagFilterItem } from 'types/api/queryBuilder/queryBuilderData';
 import { DataSource } from 'types/common/queryBuilder';
 import { generateExportToDashboardLink } from 'utils/dashboard/generateExportToDashboardLink';
 import { v4 } from 'uuid';
 
 import { Filter } from './Filter/Filter';
 import { ActionsWrapper, Container } from './styles';
-import { getTabsItems } from './utils';
+import {
+	getTabsItems,
+	isSelectedTagsAlreadyPresent,
+	isTagFilterItemEqual,
+} from './utils';
 
 function TracesExplorer(): JSX.Element {
 	const { notifications } = useNotifications();
@@ -49,6 +53,7 @@ function TracesExplorer(): JSX.Element {
 		updateAllQueriesOperators,
 		handleRunQuery,
 		stagedQuery,
+		redirectWithQueryBuilderData,
 	} = useQueryBuilder();
 
 	const { options } = useOptionsMenu({
@@ -243,31 +248,65 @@ function TracesExplorer(): JSX.Element {
 
 	const { queries } = useResourceAttribute();
 	const selectedTags = useMemo(
-		() => convertRawQueriesToTraceSelectedTags(queries),
+		() => handleNonInQueryRange(resourceAttributesToTagFilterItems(queries)),
 		[queries],
 	);
 
-	const urlQuery = useUrlQuery();
-	const selectedTraceTagsParam = urlQuery.get('selectedTags');
+	const {
+		updatedMemoizedFilters,
+		existingFilterItems,
+		isSelectedTagsExists,
+	} = useMemo((): {
+		existingFilterItems: TagFilterItem[];
+		updatedMemoizedFilters: TagFilterItem[];
+		isSelectedTagsExists: boolean;
+	} => {
+		const existingFilterItems =
+			currentQuery.builder.queryData?.[0]?.filters?.items || [];
+
+		const isSelectedTagsExists = isSelectedTagsAlreadyPresent(
+			existingFilterItems,
+			selectedTags,
+		);
+
+		return {
+			updatedMemoizedFilters: isSelectedTagsExists
+				? existingFilterItems
+				: [...existingFilterItems, ...selectedTags].filter(
+						(selectedTag) =>
+							!existingFilterItems.some((filterItem) =>
+								isTagFilterItemEqual(filterItem, selectedTag),
+							),
+				  ),
+			existingFilterItems,
+			isSelectedTagsExists,
+		};
+	}, [currentQuery.builder.queryData, selectedTags]);
+
+	const handleRun = useCallback(() => {
+		console.log({ updatedMemoizedFilters });
+		const preparedQuery: Query = {
+			...currentQuery,
+			builder: {
+				...currentQuery.builder,
+				queryData: currentQuery.builder.queryData.map((item) => ({
+					...item,
+					filters: {
+						...item.filters,
+						items: updatedMemoizedFilters,
+					},
+				})),
+			},
+		};
+		redirectWithQueryBuilderData(preparedQuery);
+	}, [currentQuery, redirectWithQueryBuilderData, updatedMemoizedFilters]);
 
 	useEffect(() => {
-		const stringifiedSelectedTags = JSON.stringify(selectedTags);
-
-		if (selectedTags.length === 0) {
-			if (urlQuery.has('selectedTags')) {
-				urlQuery.delete('selectedTags');
-				history.replace({
-					search: urlQuery.toString(),
-				});
-			}
-		} else if (selectedTraceTagsParam !== stringifiedSelectedTags) {
-			urlQuery.set('selectedTags', stringifiedSelectedTags);
-			history.replace({
-				search: urlQuery.toString(),
-			});
+		console.log({ isSelectedTagsExists, existingFilterItems, selectedTags });
+		if (!isSelectedTagsExists) {
+			handleRun();
 		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [selectedTags, urlQuery]);
+	}, [existingFilterItems, handleRun, isSelectedTagsExists, selectedTags]);
 
 	return (
 		<Sentry.ErrorBoundary fallback={<ErrorBoundaryFallback />}>
