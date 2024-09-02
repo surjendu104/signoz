@@ -23,6 +23,9 @@ import { useQueryBuilder } from 'hooks/queryBuilder/useQueryBuilder';
 import { useShareBuilderUrl } from 'hooks/queryBuilder/useShareBuilderUrl';
 import { useHandleExplorerTabChange } from 'hooks/useHandleExplorerTabChange';
 import { useNotifications } from 'hooks/useNotifications';
+import useResourceAttribute from 'hooks/useResourceAttribute';
+import { convertRawQueriesToTraceSelectedTags } from 'hooks/useResourceAttribute/utils';
+import useUrlQuery from 'hooks/useUrlQuery';
 import history from 'lib/history';
 import { cloneDeep, isEmpty, set } from 'lodash-es';
 import ErrorBoundaryFallback from 'pages/ErrorBoundaryFallback/ErrorBoundaryFallback';
@@ -237,6 +240,34 @@ function TracesExplorer(): JSX.Element {
 			logEventCalledRef.current = true;
 		}
 	}, []);
+
+	const { queries } = useResourceAttribute();
+	const selectedTags = useMemo(
+		() => convertRawQueriesToTraceSelectedTags(queries),
+		[queries],
+	);
+
+	const urlQuery = useUrlQuery();
+	const selectedTraceTagsParam = urlQuery.get('selectedTags');
+
+	useEffect(() => {
+		const stringifiedSelectedTags = JSON.stringify(selectedTags);
+
+		if (selectedTags.length === 0) {
+			if (urlQuery.has('selectedTags')) {
+				urlQuery.delete('selectedTags');
+				history.replace({
+					search: urlQuery.toString(),
+				});
+			}
+		} else if (selectedTraceTagsParam !== stringifiedSelectedTags) {
+			urlQuery.set('selectedTags', stringifiedSelectedTags);
+			history.replace({
+				search: urlQuery.toString(),
+			});
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [selectedTags, urlQuery]);
 
 	return (
 		<Sentry.ErrorBoundary fallback={<ErrorBoundaryFallback />}>
