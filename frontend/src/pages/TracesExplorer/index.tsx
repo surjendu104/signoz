@@ -283,8 +283,7 @@ function TracesExplorer(): JSX.Element {
 		};
 	}, [currentQuery.builder.queryData, selectedTags]);
 
-	const handleRun = useCallback(() => {
-		console.log({ updatedMemoizedFilters });
+	const handleAddREsourceFilters = useCallback(() => {
 		const preparedQuery: Query = {
 			...currentQuery,
 			builder: {
@@ -302,11 +301,15 @@ function TracesExplorer(): JSX.Element {
 	}, [currentQuery, redirectWithQueryBuilderData, updatedMemoizedFilters]);
 
 	useEffect(() => {
-		console.log({ isSelectedTagsExists, existingFilterItems, selectedTags });
 		if (!isSelectedTagsExists) {
-			handleRun();
+			handleAddREsourceFilters();
 		}
-	}, [existingFilterItems, handleRun, isSelectedTagsExists, selectedTags]);
+	}, [
+		existingFilterItems,
+		handleAddREsourceFilters,
+		isSelectedTagsExists,
+		selectedTags,
+	]);
 
 	return (
 		<Sentry.ErrorBoundary fallback={<ErrorBoundaryFallback />}>
